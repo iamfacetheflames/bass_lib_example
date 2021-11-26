@@ -5,7 +5,6 @@ import jouvieje.bass.defines.BASS_SAMPLE
 import jouvieje.bass.exceptions.BassException
 import jouvieje.bass.structures.HSAMPLE
 import java.io.File
-import jouvieje.bass.Bass.BASS_ChannelSeconds2Bytes
 import jouvieje.bass.defines.BASS_ATTRIB.BASS_ATTRIB_VOL
 import jouvieje.bass.defines.BASS_POS.BASS_POS_BYTE
 import jouvieje.bass.structures.HCHANNEL
@@ -20,23 +19,31 @@ interface Player {
     fun stop()
     fun seek(seconds: Double)
     fun setVolume(value: Float, durationSec: Float)
+    fun getPosition(): Double
+    fun getDuration(): Double
+    fun setListener(listener: Listener)
 
     interface Listener {
         fun onError(message: String)
+        fun onFinishTrack()
     }
 
 }
 
 class BassPlayer: Player {
 
-    private var isInit: Boolean = false
+    private var isInitLibrary: Boolean = false
     private var channel: HCHANNEL? = null
     private var handle: HSAMPLE? = null
+    private var currentListener: Player.Listener? = null
+
+    private fun error(message: String) {
+        currentListener?.onError(message)
+    }
 
     override fun init() {
         initLibrary()
-        if (isInit) {
-            /* Initialize default output device */
+        if (isInitLibrary) {
             if (
                 !Bass.BASS_Init(
                     -1,
@@ -47,25 +54,24 @@ class BassPlayer: Player {
                 )
             ) {
                 error("Can't initialize device")
-                isInit = false
+                isInitLibrary = false
             } else {
-                isInit = true
+                isInitLibrary = true
             }
         } else {
-            // todo show error
-            isInit = false
+            isInitLibrary = false
         }
     }
 
     override fun release() {
         stop()
-        isInit = false
+        isInitLibrary = false
         handle = null
         channel = null
     }
 
     override fun open(path: String) {
-        if (!isInit) {
+        if (!isInitLibrary) {
             init()
         }
         val file = File(path)
@@ -77,7 +83,6 @@ class BassPlayer: Player {
         channel?.let { channel ->
             if (!Bass.BASS_ChannelPlay(channel.asInt(), false)) {
                 error("Can't play sample")
-                // todo save error
             }
         }
     }
@@ -96,7 +101,7 @@ class BassPlayer: Player {
 
     override fun seek(seconds: Double) {
         channel?.let { channel ->
-            val prebuf = BASS_ChannelSeconds2Bytes(channel.asInt(), seconds)
+            val prebuf = Bass.BASS_ChannelSeconds2Bytes(channel.asInt(), seconds)
             Bass.BASS_ChannelSetPosition(channel.asInt(), prebuf, BASS_POS_BYTE)
         }
     }
@@ -108,11 +113,31 @@ class BassPlayer: Player {
         }
     }
 
+    override fun getPosition(): Double {
+        channel?.let { channel ->
+            val positionBytes = Bass.BASS_ChannelGetPosition(channel.asInt(), BASS_POS_BYTE)
+            return Bass.BASS_ChannelBytes2Seconds(channel.asInt(), positionBytes)
+        }
+        return -1.0
+    }
+
+    override fun getDuration(): Double {
+        channel?.let { channel ->
+            val durationBytes = Bass.BASS_ChannelGetLength(channel.asInt(), BASS_POS_BYTE)
+            return Bass.BASS_ChannelBytes2Seconds(channel.asInt(), durationBytes)
+        }
+        return -1.0
+    }
+
+    override fun setListener(listener: Player.Listener) {
+        currentListener = listener
+    }
+
     private fun initLibrary() {
         try {
             BassInit.loadLibraries()
             if (BassInit.NATIVEBASS_LIBRARY_VERSION() != BassInit.NATIVEBASS_JAR_VERSION()) {
-                println(
+                error(
                     "Error!  NativeBass library version (%08x) is different to jar version (%08x)\n" +
                             "${
                                 BassInit.NATIVEBASS_LIBRARY_VERSION()
@@ -122,14 +147,13 @@ class BassPlayer: Player {
                             }"
                 )
             }
-            // check the correct BASS was loaded
             if (Bass.BASS_GetVersion() and -0x10000 shr 16 != BassInit.BASSVERSION()) {
-                println("An incorrect version of BASS.DLL was loaded")
+                error("An incorrect version of BASS.DLL was loaded")
             } else {
-                isInit = true
+                isInitLibrary = true
             }
         } catch (e: BassException) {
-            println("NativeBass error! %s\n ${e.message}")
+            error("NativeBass error! %s\n ${e.message}")
         }
     }
 
@@ -162,6 +186,12 @@ fun main(args: Array<String>) {
                 val duration = getCommand().toFloat()
                 player.setVolume(volume, duration)
             }
+            "position" -> println(
+                "current position ${player.getPosition()} seconds"
+            )
+            "duration" -> println(
+                "file duration ${player.getDuration()} seconds"
+            )
         }
         println("input command:")
         currentCommand = getCommand()
