@@ -21,11 +21,11 @@ interface Player {
     fun setVolume(value: Float, durationSec: Float)
     fun getPosition(): Double
     fun getDuration(): Double
+    fun isSuccessfullyPlayed(): Boolean
     fun setListener(listener: Listener)
 
     interface Listener {
         fun onError(message: String)
-        fun onFinishTrack()
     }
 
 }
@@ -36,9 +36,53 @@ class BassPlayer: Player {
     private var channel: HCHANNEL? = null
     private var handle: HSAMPLE? = null
     private var currentListener: Player.Listener? = null
+    private var isPlaying: Boolean = false
 
     private fun error(message: String) {
         currentListener?.onError(message)
+    }
+
+    private fun initLibrary() {
+        try {
+            BassInit.loadLibraries()
+            if (BassInit.NATIVEBASS_LIBRARY_VERSION() != BassInit.NATIVEBASS_JAR_VERSION()) {
+                error(
+                    "Error!  NativeBass library version (%08x) is different to jar version (%08x)\n" +
+                            "${
+                                BassInit.NATIVEBASS_LIBRARY_VERSION()
+                            } \n" +
+                            "${
+                                BassInit.NATIVEBASS_JAR_VERSION()
+                            }"
+                )
+            }
+            if (Bass.BASS_GetVersion() and -0x10000 shr 16 != BassInit.BASSVERSION()) {
+                error("An incorrect version of BASS lib was loaded")
+            } else {
+                isInitLibrary = true
+            }
+        } catch (e: BassException) {
+            error("NativeBass error! %s\n ${e.message}")
+        }
+    }
+
+    private fun channelIsActive(): Boolean {
+        return channel?.let { channel ->
+            Bass.BASS_ChannelIsActive(channel.asInt()) == 1
+        } ?: false
+    }
+
+    override fun isSuccessfullyPlayed(): Boolean {
+        return if (
+            isInitLibrary &&
+            isPlaying &&
+            !channelIsActive()
+        ) {
+            isPlaying = false
+            true
+        } else {
+            false
+        }
     }
 
     override fun init() {
@@ -68,6 +112,7 @@ class BassPlayer: Player {
         isInitLibrary = false
         handle = null
         channel = null
+        Bass.BASS_Free()
     }
 
     override fun open(path: String) {
@@ -83,6 +128,8 @@ class BassPlayer: Player {
         channel?.let { channel ->
             if (!Bass.BASS_ChannelPlay(channel.asInt(), false)) {
                 error("Can't play sample")
+            } else {
+                isPlaying = true
             }
         }
     }
@@ -90,12 +137,14 @@ class BassPlayer: Player {
     override fun pause() {
         channel?.let { channel ->
             Bass.BASS_ChannelPause(channel.asInt())
+            isPlaying = false
         }
     }
 
     override fun stop() {
         handle?.let { handle ->
             Bass.BASS_SampleFree(handle)
+            isPlaying = false
         }
     }
 
@@ -131,30 +180,6 @@ class BassPlayer: Player {
 
     override fun setListener(listener: Player.Listener) {
         currentListener = listener
-    }
-
-    private fun initLibrary() {
-        try {
-            BassInit.loadLibraries()
-            if (BassInit.NATIVEBASS_LIBRARY_VERSION() != BassInit.NATIVEBASS_JAR_VERSION()) {
-                error(
-                    "Error!  NativeBass library version (%08x) is different to jar version (%08x)\n" +
-                            "${
-                                BassInit.NATIVEBASS_LIBRARY_VERSION()
-                            } \n" +
-                            "${
-                                BassInit.NATIVEBASS_JAR_VERSION()
-                            }"
-                )
-            }
-            if (Bass.BASS_GetVersion() and -0x10000 shr 16 != BassInit.BASSVERSION()) {
-                error("An incorrect version of BASS.DLL was loaded")
-            } else {
-                isInitLibrary = true
-            }
-        } catch (e: BassException) {
-            error("NativeBass error! %s\n ${e.message}")
-        }
     }
 
 }
